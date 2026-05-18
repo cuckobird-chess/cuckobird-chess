@@ -4,6 +4,7 @@ release/
 temp/**
 !temp/
 !temp/.gitkeep
+!temp/profile/
 !temp/profile/.gitkeep
 .DS_Store
 .env
