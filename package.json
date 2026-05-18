@@ -1,0 +1,88 @@
+{
+  "name": "cuckobird-chess",
+  "productName": "Cuckobird Chess",
+  "version": "0.1.0",
+  "description": "An Electron desktop app that detects chessboards from screens, windows, or cameras and analyzes them with local FEN recognition and Stockfish.",
+  "main": "dist/main.js",
+  "packageManager": "pnpm@9.4.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc && node scripts/copy-assets.mjs",
+    "start": "pnpm run build && electron .",
+    "start:debug": "pnpm run build && CUCKOBIRD_CHESS_DEBUG=1 electron .",
+    "crop-board": "electron . --crop-board",
+    "crop-board:build": "pnpm run build && electron . --crop-board",
+    "crop-board:debug": "pnpm run build && CUCKOBIRD_CHESS_DEBUG=1 electron . --crop-board",
+    "dev": "node scripts/copy-assets.mjs && tsc --watch --preserveWatchOutput",
+    "profile:report": "node scripts/profile-report.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "pnpm run build && electron-builder",
+    "package:dir": "pnpm run build && electron-builder --dir"
+  },
+  "keywords": [
+    "chess",
+    "electron",
+    "fen",
+    "stockfish",
+    "onnx",
+    "typescript"
+  ],
+  "author": "Cuckobird Chess contributors",
+  "license": "ISC",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=9.4.0"
+  },
+  "build": {
+    "appId": "dev.cuckobird-chess.app",
+    "productName": "Cuckobird Chess",
+    "icon": "logo.png",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "models/piece-model.onnx",
+        "to": "models/piece-model.onnx"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/bin/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "onnxruntime-node": "^1.26.0"
+  }
+}

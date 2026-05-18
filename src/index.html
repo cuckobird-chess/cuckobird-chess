@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cuckobird Chess</title>
+    <link rel="icon" href="./logo.png" type="image/png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="appShell" class="app-shell">
+      <aside id="sourcePanel" class="source-panel" aria-label="Screen, window, and camera picker">
+        <div class="source-panel-header">
+          <div class="brand-lockup">
+            <img class="app-logo" src="./logo.png" alt="" />
+            <div class="brand-copy">
+              <h1>Cuckobird Chess</h1>
+              <p id="statusText" class="status" data-tone="neutral">Loading sources...</p>
+            </div>
+          </div>
+          <button id="refreshButton" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <section class="selection-bar" aria-live="polite">
+          <span>Selected</span>
+          <strong id="selectedName">Nothing selected</strong>
+        </section>
+
+        <section class="source-picker" aria-label="Available screens, windows, and cameras">
+          <button
+            id="sourceDropdownButton"
+            class="source-dropdown-button"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            disabled
+          >
+            <span class="selected-preview-frame">
+              <img id="selectedPreview" alt="" />
+            </span>
+            <span class="selected-source-copy">
+              <span id="selectedKind" class="source-kind">Source</span>
+              <span id="selectedDropdownName" class="source-name">Choose a screen, window, or camera</span>
+            </span>
+            <span class="dropdown-caret" aria-hidden="true">v</span>
+          </button>
+          <div id="sourceGrid" class="source-dropdown-menu" role="listbox"></div>
+        </section>
+
+        <section class="settings-panel" aria-label="User settings">
+          <div class="hidden-mode-row">
+            <div class="hidden-mode-copy">
+              <span class="hidden-mode-label">Hidden mode</span>
+              <p id="hiddenModeStatus" class="hidden-mode-status" data-tone="neutral" aria-live="polite">Off</p>
+            </div>
+            <label class="hidden-mode-switch">
+              <input
+                id="hiddenModeToggle"
+                class="hidden-mode-input"
+                type="checkbox"
+                role="switch"
+                aria-label="Hidden mode"
+                aria-describedby="hiddenModeStatus"
+              />
+              <span class="hidden-mode-track" aria-hidden="true">
+                <span class="hidden-mode-thumb"></span>
+              </span>
+            </label>
+          </div>
+
+          <div class="endpoint-panel">
+            <span class="endpoint-label">Local API</span>
+            <div class="endpoint-list">
+              <div class="endpoint-item">
+                <span>Analysis</span>
+                <code id="evalEndpoint" class="endpoint-url">Starting...</code>
+              </div>
+            </div>
+            <p id="endpointStatus" class="endpoint-status" data-tone="neutral" aria-live="polite">
+              Starting local API...
+            </p>
+          </div>
+        </section>
+      </aside>
+
+      <button
+        id="panelToggle"
+        class="panel-toggle"
+        type="button"
+        aria-label="Hide source panel"
+        aria-controls="sourcePanel"
+        aria-expanded="true"
+      >
+        <svg
+          class="panel-toggle-icon panel-toggle-icon-close"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M9 4v16" />
+          <path d="m16 9-3 3 3 3" />
+        </svg>
+        <svg
+          class="panel-toggle-icon panel-toggle-icon-open"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M9 4v16" />
+          <path d="m13 9 3 3-3 3" />
+        </svg>
+      </button>
+
+      <section class="board-stage" aria-label="Recognized chess position">
+        <div class="board-panel">
+          <div class="board-panel-header">
+            <div>
+              <span class="eyebrow">FEN board</span>
+              <h2 id="boardTitle">Position</h2>
+            </div>
+            <button id="captureButton" class="primary" type="button" disabled>Start</button>
+          </div>
+
+          <div class="board-view">
+            <div
+              id="evaluationBar"
+              class="evaluation-bar"
+              data-active="false"
+              role="img"
+              aria-label="Engine evaluation unavailable"
+            >
+              <div id="evaluationFill" class="evaluation-fill" aria-hidden="true"></div>
+              <span id="evaluationValue" class="evaluation-value">0.0</span>
+            </div>
+            <div id="fenBoard" class="fen-board" role="img" aria-label="Empty chessboard"></div>
+            <div class="board-side-controls">
+              <div class="orientation-toggle" role="group" aria-label="Board perspective">
+                <button id="orientationWhiteButton" class="orientation-button" type="button" disabled>White</button>
+                <button id="orientationBlackButton" class="orientation-button" type="button" disabled>Black</button>
+              </div>
+              <label class="stockfish-control" for="stockfishMoveTimeInput">
+                <span>Think</span>
+                <input
+                  id="stockfishMoveTimeInput"
+                  class="stockfish-number"
+                  type="number"
+                  min="50"
+                  max="1000"
+                  step="10"
+                  value="220"
+                  inputmode="numeric"
+                />
+                <span class="stockfish-unit">ms</span>
+              </label>
+              <input
+                id="stockfishMoveTimeRange"
+                class="stockfish-range"
+                type="range"
+                min="50"
+                max="1000"
+                step="10"
+                value="220"
+                aria-label="Stockfish thinking time"
+              />
+            </div>
+          </div>
+          <p id="fenOutput" class="fen-output">No FEN loaded</p>
+        </div>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
