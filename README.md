@@ -7,7 +7,7 @@
 > [!WARNING]
 > **Fair-play disclaimer:** This project is provided only for education, research, and entertainment purposes. Do not use it to cheat, receive live engine assistance, or gain an unfair advantage in online games, rated games, tournaments, or any setting where engine help is not explicitly allowed.
 
-Cuckobird Chess is a local Electron desktop app for reading chess positions from a screen, window, or camera source. It detects the board, recognizes the position as FEN with an ONNX model, asks Stockfish for a best move, and exposes the latest evaluation through a localhost API.
+Cuckobird Chess is a local Electron desktop app for reading chess positions from a screen, window, or camera source. It detects the board, recognizes the position as FEN with an ONNX model, asks Stockfish and Maia for moves, and exposes the latest evaluation through a localhost API.
 
 <p align="center">
   <img src="./screenshot.png" alt="Cuckobird Chess analyzing a detected chess position" width="820" />
@@ -18,17 +18,18 @@ Cuckobird Chess is a local Electron desktop app for reading chess positions from
 - Node.js `>=22.12.0`
 - pnpm `>=9.4.0`
 - Stockfish available on `PATH`, or `STOCKFISH_PATH` pointing to the engine executable
+- Optional for Maia's orange arrow: Lc0 available on `PATH`, or `LC0_PATH` pointing to the `lc0` executable
 - Optional: Tesseract available on `PATH`, or `TESSERACT_PATH` pointing to the OCR executable, for OCR-assisted board orientation
 - Runtime model file: `models/piece-model.onnx`
 
 ## Installation
 
-Install Node.js `22.12.0` or newer and Stockfish, then install the app dependencies from this repo. Tesseract is optional; the commands below include it where available because it can improve board-orientation detection.
+Install Node.js `22.12.0` or newer and Stockfish, then install the app dependencies from this repo. Lc0 is optional and only needed for Maia. Tesseract is optional; the commands below include it where available because it can improve board-orientation detection.
 
 ## macOS
 
 ```bash
-brew install node stockfish tesseract
+brew install node stockfish lc0 tesseract
 corepack enable
 corepack prepare pnpm@9.4.0 --activate
 pnpm install
@@ -51,7 +52,7 @@ pnpm install
 pnpm start
 ```
 
-For other distros, install Node.js `22.12.0` or newer, `stockfish`, and `tesseract` with your package manager, then run the Corepack and pnpm commands above.
+For other distros, install Node.js `22.12.0` or newer, `stockfish`, optional `lc0`, and `tesseract` with your package manager, then run the Corepack and pnpm commands above.
 
 ## Windows
 
@@ -70,6 +71,12 @@ Install Stockfish from [stockfishchess.org/download](https://stockfishchess.org/
 
 ```powershell
 [Environment]::SetEnvironmentVariable("STOCKFISH_PATH", "C:\Tools\stockfish\stockfish.exe", "User")
+```
+
+To use Maia on Windows, install Lc0 from [lczero.org](https://lczero.org/play/download/) and set `LC0_PATH`:
+
+```powershell
+[Environment]::SetEnvironmentVariable("LC0_PATH", "C:\Tools\lc0\lc0.exe", "User")
 ```
 
 If Tesseract is not added to `PATH`, set:
@@ -105,11 +112,12 @@ pnpm run package:dir
 pnpm run package
 ```
 
-`pnpm run package` creates platform installers in `release/`. Stockfish and Tesseract are not bundled; users should install them separately or set `STOCKFISH_PATH` and `TESSERACT_PATH`.
+`pnpm run package` creates platform installers in `release/`. Stockfish, Lc0, and Tesseract are not bundled; users should install them separately or set `STOCKFISH_PATH`, `LC0_PATH`, and `TESSERACT_PATH`.
 
 ## Configuration
 
 - `STOCKFISH_PATH`: absolute path to a Stockfish executable when it is not on `PATH`.
+- `LC0_PATH`: absolute path to an Lc0 executable when it is not on `PATH`. Maia weights are downloaded to app data on first use for the selected rating. The Maia arrow uses a small Lc0 search on the Maia net so it is stronger than pure one-node Maia.
 - `TESSERACT_PATH`: absolute path to a Tesseract executable when it is not on `PATH`.
 - `CUCKOBIRD_CHESS_DEBUG=1` or `DEBUG_CUCKOBIRD_CHESS=1`: enables debug artifacts and capture profiling. You can also use `pnpm run start:debug`.
 
@@ -117,11 +125,11 @@ pnpm run package
 
 The app starts a local-only HTTP server when it launches. It prefers port `7000` and falls back to a random free port if needed. The sidebar shows the active URL.
 
-- `GET /eval`: returns JSON with the latest top move, Stockfish eval, and detected board side, such as `{"top":"Nf3","eval":"+0.8","board_side":"white"}`.
+- `GET /eval`: returns JSON with the latest Stockfish and Maia moves, Stockfish eval when available, and detected board side, such as `{"top":"Nf3","stockfish":"Nf3","maia":"Be2","eval":"+0.8","board_side":"white"}`.
 
 ## Privacy Notes
 
-Screenshot and camera frames are analyzed locally in memory. The app does not send moves to a remote endpoint.
+Screenshot and camera frames are analyzed locally in memory. The app does not send positions or moves to a remote endpoint. When Maia runs, it may download the selected public Maia weights file once and reuse it from app data.
 
 Debug mode saves detected board crops and board metadata to `temp/`, and per-capture profiler JSON files to `temp/profile/`; normal runs do not write those debug PNG or JSON files. `temp/` is ignored by git.
 

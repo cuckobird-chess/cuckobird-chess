@@ -7,6 +7,9 @@ const api: ScreenshotApi = {
     ipcRenderer.invoke("source:capture", sourceId) as Promise<CaptureResult>,
   captureImageDataUrl: (sourceId, sourceKind, imageDataUrl, frameCaptureMs) =>
     ipcRenderer.invoke("source:capture-image-data-url", sourceId, sourceKind, imageDataUrl, frameCaptureMs) as ReturnType<ScreenshotApi["captureImageDataUrl"]>,
+  getEngineSettings: () => ipcRenderer.invoke("engine:get-settings") as ReturnType<ScreenshotApi["getEngineSettings"]>,
+  setMaiaRating: (rating: number) =>
+    ipcRenderer.invoke("engine:set-maia-rating", rating) as ReturnType<ScreenshotApi["setMaiaRating"]>,
   getStockfishSettings: () => ipcRenderer.invoke("stockfish:get-settings") as ReturnType<ScreenshotApi["getStockfishSettings"]>,
   setStockfishMoveTime: (moveTimeMs: number) =>
     ipcRenderer.invoke("stockfish:set-move-time", moveTimeMs) as ReturnType<ScreenshotApi["setStockfishMoveTime"]>,

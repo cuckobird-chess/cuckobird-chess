@@ -140,6 +140,25 @@
                 <button id="orientationWhiteButton" class="orientation-button" type="button" disabled>White</button>
                 <button id="orientationBlackButton" class="orientation-button" type="button" disabled>Black</button>
               </div>
+              <div class="engine-row">
+                <div class="engine-legend" aria-label="Engine arrow colors">
+                  <span><i class="engine-swatch stockfish-swatch" aria-hidden="true"></i>Stockfish</span>
+                  <span><i class="engine-swatch maia-swatch" aria-hidden="true"></i>Maia</span>
+                </div>
+                <label class="engine-control maia-rating-control" for="maiaRatingInput">
+                  <span>Rating</span>
+                  <input
+                    id="maiaRatingInput"
+                    class="engine-number"
+                    type="number"
+                    min="1100"
+                    max="1900"
+                    step="100"
+                    value="1900"
+                    inputmode="numeric"
+                  />
+                </label>
+              </div>
               <label class="stockfish-control" for="stockfishMoveTimeInput">
                 <span>Think</span>
                 <input

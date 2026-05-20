@@ -7,6 +7,14 @@ export type CaptureSource = {
   thumbnailDataUrl: string;
 };
 
+export type EngineMove = {
+  uci: string;
+  san: string;
+  from: string;
+  to: string;
+  promotion?: string;
+};
+
 export type CaptureResult = {
   skipped?: {
     reason: "unchanged" | "unstable" | "superseded";
@@ -21,19 +29,17 @@ export type CaptureResult = {
       confidence: number;
       warning?: string;
     };
-    bestMove?: {
-      uci: string;
-      san: string;
-      from: string;
-      to: string;
-      promotion?: string;
-    };
+    bestMove?: EngineMove;
+    stockfishMove?: EngineMove;
+    maiaMove?: EngineMove;
     evaluation?: {
       type: "cp" | "mate";
       whiteValue: number;
       display: string;
     };
     engineError?: string;
+    stockfishError?: string;
+    maiaError?: string;
     fenError?: string;
     detection: {
       x: number;
@@ -53,6 +59,19 @@ export type StockfishSettings = {
   minMoveTimeMs: number;
   maxMoveTimeMs: number;
   stepMs: number;
+};
+
+export type MaiaSettings = {
+  rating: number;
+  minRating: number;
+  maxRating: number;
+  stepRating: number;
+  availableRatings: number[];
+};
+
+export type EngineSettings = {
+  stockfish: StockfishSettings;
+  maia: MaiaSettings;
 };
 
 export type LocalApiSettings = {
@@ -75,6 +94,8 @@ export type ScreenshotApi = {
     imageDataUrl: string,
     frameCaptureMs?: number
   ) => Promise<CaptureResult>;
+  getEngineSettings: () => Promise<EngineSettings>;
+  setMaiaRating: (rating: number) => Promise<EngineSettings>;
   getStockfishSettings: () => Promise<StockfishSettings>;
   setStockfishMoveTime: (moveTimeMs: number) => Promise<StockfishSettings>;
   getLocalApiSettings: () => Promise<LocalApiSettings>;

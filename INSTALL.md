@@ -1,11 +1,11 @@
 # Installation Guide
 
-Install Node.js `22.12.0` or newer and Stockfish, then install the app dependencies from this repo. Tesseract is optional; the commands below include it where available because it can improve board-orientation detection.
+Install Node.js `22.12.0` or newer and Stockfish, then install the app dependencies from this repo. Lc0 is optional and only needed for Maia. Tesseract is optional; the commands below include it where available because it can improve board-orientation detection.
 
 ## macOS
 
 ```bash
-brew install node stockfish tesseract
+brew install node stockfish lc0 tesseract
 corepack enable
 corepack prepare pnpm@9.4.0 --activate
 pnpm install
@@ -28,7 +28,7 @@ pnpm install
 pnpm start
 ```
 
-For other distros, install Node.js `22.12.0` or newer, `stockfish`, and `tesseract` with your package manager, then run the Corepack and pnpm commands above.
+For other distros, install Node.js `22.12.0` or newer, `stockfish`, optional `lc0`, and `tesseract` with your package manager, then run the Corepack and pnpm commands above.
 
 ## Windows
 
@@ -47,6 +47,12 @@ Install Stockfish from [stockfishchess.org/download](https://stockfishchess.org/
 
 ```powershell
 [Environment]::SetEnvironmentVariable("STOCKFISH_PATH", "C:\Tools\stockfish\stockfish.exe", "User")
+```
+
+To use Maia on Windows, install Lc0 from [lczero.org](https://lczero.org/play/download/) and set `LC0_PATH`:
+
+```powershell
+[Environment]::SetEnvironmentVariable("LC0_PATH", "C:\Tools\lc0\lc0.exe", "User")
 ```
 
 If Tesseract is not added to `PATH`, set:

@@ -3,7 +3,7 @@ import { Chess } from "chess.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,8 +12,10 @@ import { recognizeFen, type FenRecognition } from "./pieceRecognizer";
 import type {
   CaptureResult,
   CaptureSource,
+  EngineSettings,
   HiddenModeSettings,
   LocalApiSettings,
+  MaiaSettings,
   SourceKind,
   StockfishSettings
 } from "./types";
@@ -46,6 +48,17 @@ const stockfishFallbackPaths =
     : process.platform === "darwin"
       ? ["/opt/homebrew/bin/stockfish", "/usr/local/bin/stockfish", "/usr/bin/stockfish"]
       : ["/usr/games/stockfish", "/usr/local/bin/stockfish", "/usr/bin/stockfish"];
+const lc0FallbackPaths =
+  process.platform === "win32"
+    ? [
+        path.join(programFiles, "Lc0", "lc0.exe"),
+        path.join(programFilesX86, "Lc0", "lc0.exe"),
+        path.join(programFiles, "Leela Chess Zero", "lc0.exe"),
+        path.join(programFilesX86, "Leela Chess Zero", "lc0.exe")
+      ]
+    : process.platform === "darwin"
+      ? ["/opt/homebrew/bin/lc0", "/usr/local/bin/lc0", "/usr/bin/lc0"]
+      : ["/usr/games/lc0", "/usr/local/bin/lc0", "/usr/bin/lc0"];
 const tesseractFallbackPaths =
   process.platform === "win32"
     ? [
@@ -69,6 +82,15 @@ const stockfishMaxMoveTimeMs = 1000;
 const stockfishMoveTimeStepMs = 10;
 let stockfishMoveTimeMs = 220;
 const stockfishTimeoutMs = 2500;
+const maiaAvailableRatings = [1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900] as const;
+const maiaMinRating = maiaAvailableRatings[0];
+const maiaMaxRating = maiaAvailableRatings[maiaAvailableRatings.length - 1];
+const maiaRatingStep = 100;
+let maiaRating = 1900;
+let engineSettingsRevision = 0;
+const maiaTimeoutMs = 8000;
+const maiaSearchNodes = 32;
+const maiaWeightsDirectory = path.join(app.getPath("userData"), "maia-weights");
 const localApiPreferredPort = 7000;
 const localApiHost = "localhost";
 let localApiServer: Server | undefined;
@@ -229,11 +251,27 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const normalizeStockfishMoveTime = (moveTimeMs: number) =>
   clamp(Math.round(moveTimeMs / stockfishMoveTimeStepMs) * stockfishMoveTimeStepMs, stockfishMinMoveTimeMs, stockfishMaxMoveTimeMs);
 
+const normalizeMaiaRating = (rating: number) =>
+  clamp(Math.round(rating / maiaRatingStep) * maiaRatingStep, maiaMinRating, maiaMaxRating);
+
 const getStockfishSettings = (): StockfishSettings => ({
   moveTimeMs: stockfishMoveTimeMs,
   minMoveTimeMs: stockfishMinMoveTimeMs,
   maxMoveTimeMs: stockfishMaxMoveTimeMs,
   stepMs: stockfishMoveTimeStepMs
+});
+
+const getMaiaSettings = (): MaiaSettings => ({
+  rating: maiaRating,
+  minRating: maiaMinRating,
+  maxRating: maiaMaxRating,
+  stepRating: maiaRatingStep,
+  availableRatings: [...maiaAvailableRatings]
+});
+
+const getEngineSettings = (): EngineSettings => ({
+  stockfish: getStockfishSettings(),
+  maia: getMaiaSettings()
 });
 
 const getErrorCode = (error: unknown) =>
@@ -274,6 +312,8 @@ const cloneBoard = (board: CapturedBoard): CapturedBoard => ({
   detection: { ...board.detection },
   fen: board.fen ? { ...board.fen } : undefined,
   bestMove: board.bestMove ? { ...board.bestMove } : undefined,
+  stockfishMove: board.stockfishMove ? { ...board.stockfishMove } : undefined,
+  maiaMove: board.maiaMove ? { ...board.maiaMove } : undefined,
   evaluation: board.evaluation ? { ...board.evaluation } : undefined
 });
 
@@ -931,6 +971,38 @@ const getStockfishCommand = () => {
   return getOptionalExecutable("stockfish", "STOCKFISH_PATH", stockfishFallbackPaths) ?? "stockfish";
 };
 
+const getLc0Command = () => {
+  return getOptionalExecutable("lc0", "LC0_PATH", lc0FallbackPaths);
+};
+
+const getMaiaWeightsPath = (rating: number) => path.join(maiaWeightsDirectory, `maia-${rating}.pb.gz`);
+
+const getMaiaWeightsUrl = (rating: number) =>
+  `https://raw.githubusercontent.com/CSSLab/maia-chess/master/maia_weights/maia-${rating}.pb.gz`;
+
+const ensureMaiaWeights = async (rating: number) => {
+  const weightsPath = getMaiaWeightsPath(rating);
+
+  if (existsSync(weightsPath)) {
+    return weightsPath;
+  }
+
+  await mkdir(maiaWeightsDirectory, { recursive: true });
+
+  const downloadUrl = getMaiaWeightsUrl(rating);
+  const temporaryPath = `${weightsPath}.download`;
+  console.log(`[capture] downloading Maia ${rating} weights`);
+  const response = await fetch(downloadUrl);
+
+  if (!response.ok) {
+    throw new Error(`Could not download Maia ${rating} weights (${response.status}).`);
+  }
+
+  await writeFile(temporaryPath, Buffer.from(await response.arrayBuffer()));
+  await rename(temporaryPath, weightsPath);
+  return weightsPath;
+};
+
 type UciMove = {
   uci: string;
   from: string;
@@ -977,9 +1049,16 @@ const parseBestMove = (bestMove: string, fen: string) => {
 
 type BestMove = NonNullable<NonNullable<CaptureResult["board"]>["bestMove"]>;
 type EngineEvaluation = NonNullable<NonNullable<CaptureResult["board"]>["evaluation"]>;
-type StockfishAnalysis = {
+type EngineAnalysis = {
   bestMove: BestMove;
   evaluation?: EngineEvaluation;
+};
+
+type EngineAnalysisResult = {
+  stockfish?: EngineAnalysis;
+  maia?: EngineAnalysis;
+  stockfishError?: string;
+  maiaError?: string;
 };
 
 type LatestAnalysisState = {
@@ -987,6 +1066,8 @@ type LatestAnalysisState = {
   sourceId?: string;
   fen?: string;
   bestMove?: BestMove;
+  stockfishMove?: BestMove;
+  maiaMove?: BestMove;
   evaluation?: EngineEvaluation;
   boardSide?: BoardPerspective;
   message?: string;
@@ -1017,7 +1098,7 @@ const markLatestAnalysisPending = (
     sourceId,
     fen,
     boardSide,
-    message: isSamePosition && (latestAnalysisState.bestMove || latestAnalysisState.evaluation)
+    message: isSamePosition && (latestAnalysisState.bestMove || latestAnalysisState.maiaMove || latestAnalysisState.evaluation)
       ? "Continuing analysis for the current board."
       : "Engine analysis is pending.",
     updatedAt: nowIso()
@@ -1028,14 +1109,16 @@ const markLatestAnalysisReady = (
   sourceId: string,
   fen: string,
   orientation: BoardDetection["orientation"],
-  analysis: StockfishAnalysis
+  analysis: EngineAnalysisResult
 ) => {
   latestAnalysisState = {
     status: "ready",
     sourceId,
     fen,
-    bestMove: analysis.bestMove,
-    evaluation: analysis.evaluation,
+    bestMove: analysis.stockfish?.bestMove,
+    stockfishMove: analysis.stockfish?.bestMove,
+    maiaMove: analysis.maia?.bestMove,
+    evaluation: analysis.stockfish?.evaluation,
     boardSide: getBoardSide(orientation),
     message: "Engine analysis is ready.",
     updatedAt: nowIso()
@@ -1049,7 +1132,8 @@ const markLatestAnalysisError = (
   message: string
 ) => {
   const hasCurrentResult =
-    latestAnalysisState.fen === fen && (latestAnalysisState.bestMove || latestAnalysisState.evaluation);
+    latestAnalysisState.fen === fen &&
+    (latestAnalysisState.bestMove || latestAnalysisState.maiaMove || latestAnalysisState.evaluation);
   const boardSide = getBoardSide(orientation) ?? (hasCurrentResult ? latestAnalysisState.boardSide : undefined);
 
   latestAnalysisState = {
@@ -1085,12 +1169,16 @@ const getUnavailableStatusCode = () => {
 
 type LocalApiAnalysisResponse = {
   top: string | null;
+  stockfish: string | null;
+  maia: string | null;
   eval: string | null;
   board_side: BoardPerspective | null;
 };
 
 const getLocalApiAnalysisResponse = (): LocalApiAnalysisResponse => ({
-  top: latestAnalysisState.bestMove?.san ?? null,
+  top: latestAnalysisState.stockfishMove?.san ?? null,
+  stockfish: latestAnalysisState.stockfishMove?.san ?? null,
+  maia: latestAnalysisState.maiaMove?.san ?? null,
   eval: latestAnalysisState.evaluation?.display ?? null,
   board_side: latestAnalysisState.boardSide ?? null
 });
@@ -1142,7 +1230,7 @@ const handleLocalApiRequest = (request: IncomingMessage, response: ServerRespons
 
   if (pathname === "/eval") {
     const body = getLocalApiAnalysisResponse();
-    const statusCode = body.top || body.eval ? 200 : getUnavailableStatusCode();
+    const statusCode = body.stockfish || body.maia || body.eval ? 200 : getUnavailableStatusCode();
     writeJsonResponse(response, statusCode, body, includeBody);
     return;
   }
@@ -1184,10 +1272,10 @@ const startLocalApiServer = async () => {
   }
 };
 
-class SupersededStockfishAnalysisError extends Error {
-  constructor() {
-    super("Stockfish analysis was superseded by a newer position.");
-    this.name = "SupersededStockfishAnalysisError";
+class SupersededEngineAnalysisError extends Error {
+  constructor(engineLabel: string) {
+    super(`${engineLabel} analysis was superseded by a newer position.`);
+    this.name = "SupersededEngineAnalysisError";
   }
 }
 
@@ -1208,7 +1296,7 @@ const formatMateEvaluation = (whiteValue: number) => {
   return `${whiteValue < 0 ? "-" : ""}M${mateIn}`;
 };
 
-const parseStockfishEvaluation = (line: string, fen: string): EngineEvaluation | undefined => {
+const parseUciEvaluation = (line: string, fen: string): EngineEvaluation | undefined => {
   const match = /\bscore\s+(cp|mate)\s+(-?\d+)/.exec(line);
 
   if (!match) {
@@ -1231,34 +1319,48 @@ const parseStockfishEvaluation = (line: string, fen: string): EngineEvaluation |
   };
 };
 
-type StockfishJob = {
+type UciEngineLaunch = {
+  command: string;
+  args?: string[];
+};
+
+type UciAnalyzerOptions = {
+  label: string;
+  createLaunch: () => UciEngineLaunch | Promise<UciEngineLaunch>;
+  getGoCommand: () => string;
+  timeoutMs: number;
+};
+
+type UciEngineJob = {
   fen: string;
-  resolve: (analysis: StockfishAnalysis) => void;
+  resolve: (analysis: EngineAnalysis) => void;
   reject: (error: Error) => void;
   timeout?: NodeJS.Timeout;
 };
 
-class PersistentStockfish {
+class PersistentUciAnalyzer {
   private engine?: ChildProcessWithoutNullStreams;
   private bootPromise?: Promise<void>;
   private resolveBoot?: () => void;
   private rejectBoot?: (error: Error) => void;
   private output = "";
-  private currentJob?: StockfishJob;
+  private currentJob?: UciEngineJob;
   private currentEvaluation?: EngineEvaluation;
   private activeFen?: string;
-  private queue: StockfishJob[] = [];
+  private queue: UciEngineJob[] = [];
   private waitingForReady = false;
   private isStopping = false;
 
-  findBestMove(fen: string): Promise<StockfishAnalysis> {
+  constructor(private readonly options: UciAnalyzerOptions) {}
+
+  findBestMove(fen: string): Promise<EngineAnalysis> {
     return new Promise((resolve, reject) => {
-      const supersededError = new SupersededStockfishAnalysisError();
+      const supersededError = new SupersededEngineAnalysisError(this.options.label);
       this.rejectQueuedJobs(supersededError);
       this.queue.push({ fen, resolve, reject });
 
       if (this.currentJob && this.currentJob.fen !== fen) {
-        console.log("[capture] dropped Stockfish analysis for superseded position");
+        console.log(`[capture] dropped ${this.options.label} analysis for superseded position`);
         this.failCurrentJob(supersededError, true);
       }
 
@@ -1266,14 +1368,21 @@ class PersistentStockfish {
     });
   }
 
-  dispose() {
+  dispose(error = new Error(`${this.options.label} stopped.`)) {
     this.isStopping = true;
-    const engine = this.engine;
+    this.rejectQueuedJobs(error);
+    this.rejectCurrentJob(error);
+    this.stopEngine();
+  }
 
+  private stopEngine() {
+    const engine = this.engine;
     this.engine = undefined;
     this.bootPromise = undefined;
     this.activeFen = undefined;
-
+    this.output = "";
+    this.resolveBoot = undefined;
+    this.rejectBoot = undefined;
     if (engine && !engine.killed) {
       engine.kill();
     }
@@ -1292,6 +1401,19 @@ class PersistentStockfish {
     }
   }
 
+  private rejectCurrentJob(error: Error) {
+    const job = this.currentJob;
+    this.currentJob = undefined;
+    this.currentEvaluation = undefined;
+    this.waitingForReady = false;
+
+    if (job?.timeout) {
+      clearTimeout(job.timeout);
+    }
+
+    job?.reject(error);
+  }
+
   private async pump() {
     if (this.currentJob || this.queue.length === 0) {
       return;
@@ -1301,7 +1423,7 @@ class PersistentStockfish {
       await this.ensureStarted();
     } catch (error) {
       const job = this.queue.shift();
-      const message = error instanceof Error ? error.message : "Could not start Stockfish.";
+      const message = error instanceof Error ? error.message : `Could not start ${this.options.label}.`;
       job?.reject(new Error(message));
       void this.pump();
       return;
@@ -1317,8 +1439,8 @@ class PersistentStockfish {
     this.currentEvaluation = undefined;
     this.waitingForReady = true;
     job.timeout = setTimeout(() => {
-      this.failCurrentJob(new Error("Stockfish did not return a move in time."), true);
-    }, stockfishTimeoutMs);
+      this.failCurrentJob(new Error(`${this.options.label} did not return a move in time.`), true);
+    }, this.options.timeoutMs);
 
     if (this.activeFen !== job.fen) {
       this.engine.stdin.write("ucinewgame\n");
@@ -1329,27 +1451,45 @@ class PersistentStockfish {
   }
 
   private ensureStarted() {
-    if (this.engine) {
+    if (this.engine || this.bootPromise) {
       return this.bootPromise ?? Promise.resolve();
     }
 
     this.isStopping = false;
     this.output = "";
-    this.bootPromise = new Promise<void>((resolve, reject) => {
-      this.resolveBoot = resolve;
-      this.rejectBoot = reject;
+    this.bootPromise = this.startEngine().catch((error) => {
+      this.engine = undefined;
+      this.bootPromise = undefined;
+      this.activeFen = undefined;
+      this.output = "";
+      this.rejectBoot = undefined;
+      this.resolveBoot = undefined;
+      throw error;
     });
 
-    const engine = spawn(getStockfishCommand(), [], { stdio: "pipe" });
-    this.engine = engine;
-    engine.stdout.setEncoding("utf8");
-    engine.stderr.setEncoding("utf8");
-    engine.stdout.on("data", (chunk: string) => this.handleOutput(chunk));
-    engine.once("error", (error) => this.handleEngineFailure(engine, error));
-    engine.once("close", () => this.handleEngineClosed(engine));
-    engine.stdin.write("uci\n");
-
     return this.bootPromise;
+  }
+
+  private async startEngine() {
+    const launch = await this.options.createLaunch();
+
+    if (this.isStopping) {
+      throw new Error(`${this.options.label} was stopped before it started.`);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      this.resolveBoot = resolve;
+      this.rejectBoot = reject;
+
+      const engine = spawn(launch.command, launch.args ?? [], { stdio: "pipe" });
+      this.engine = engine;
+      engine.stdout.setEncoding("utf8");
+      engine.stderr.setEncoding("utf8");
+      engine.stdout.on("data", (chunk: string) => this.handleOutput(chunk));
+      engine.once("error", (error) => this.handleEngineFailure(engine, error));
+      engine.once("close", () => this.handleEngineClosed(engine));
+      engine.stdin.write("uci\n");
+    });
   }
 
   private handleOutput(chunk: string) {
@@ -1377,12 +1517,12 @@ class PersistentStockfish {
     if (line === "readyok" && this.currentJob && this.waitingForReady && this.engine) {
       this.waitingForReady = false;
       this.engine.stdin.write(`position fen ${this.currentJob.fen}\n`);
-      this.engine.stdin.write(`go movetime ${stockfishMoveTimeMs}\n`);
+      this.engine.stdin.write(`${this.options.getGoCommand()}\n`);
       return;
     }
 
     if (line.startsWith("info ") && this.currentJob) {
-      const evaluation = parseStockfishEvaluation(line, this.currentJob.fen);
+      const evaluation = parseUciEvaluation(line, this.currentJob.fen);
 
       if (evaluation) {
         this.currentEvaluation = evaluation;
@@ -1407,7 +1547,7 @@ class PersistentStockfish {
       if (parsedMove) {
         job.resolve({ bestMove: parsedMove, evaluation });
       } else {
-        job.reject(new Error("Stockfish did not find a legal move."));
+        job.reject(new Error(`${this.options.label} did not find a legal move.`));
       }
 
       void this.pump();
@@ -1415,19 +1555,11 @@ class PersistentStockfish {
   }
 
   private failCurrentJob(error: Error, restartEngine: boolean) {
-    const job = this.currentJob;
-    this.currentJob = undefined;
-    this.currentEvaluation = undefined;
-    this.waitingForReady = false;
-
-    if (job?.timeout) {
-      clearTimeout(job.timeout);
-    }
-
-    job?.reject(error);
+    this.rejectCurrentJob(error);
 
     if (restartEngine) {
-      this.dispose();
+      this.isStopping = true;
+      this.stopEngine();
     }
 
     void this.pump();
@@ -1453,7 +1585,7 @@ class PersistentStockfish {
       return;
     }
 
-    const error = new Error("Stockfish stopped unexpectedly.");
+    const error = new Error(`${this.options.label} stopped unexpectedly.`);
     this.engine = undefined;
     this.bootPromise = undefined;
     this.activeFen = undefined;
@@ -1468,9 +1600,31 @@ class PersistentStockfish {
   }
 }
 
-const stockfish = new PersistentStockfish();
+const stockfish = new PersistentUciAnalyzer({
+  label: "Stockfish",
+  createLaunch: () => ({ command: getStockfishCommand() }),
+  getGoCommand: () => `go movetime ${stockfishMoveTimeMs}`,
+  timeoutMs: stockfishTimeoutMs
+});
 
-const findBestMove = (fen: string) => stockfish.findBestMove(fen);
+const maia = new PersistentUciAnalyzer({
+  label: "Maia",
+  createLaunch: async () => {
+    const lc0Command = getLc0Command();
+
+    if (!lc0Command) {
+      throw new Error("Lc0 is not installed. Install lc0 or set LC0_PATH to use Maia.");
+    }
+
+    const rating = maiaRating;
+    const weightsPath = await ensureMaiaWeights(rating);
+    return { command: lc0Command, args: [`--weights=${weightsPath}`] };
+  },
+  getGoCommand: () => `go nodes ${maiaSearchNodes}`,
+  timeoutMs: maiaTimeoutMs
+});
+
+const getMaiaLabel = () => `Maia ${maiaRating}`;
 
 type BackgroundEngineTask = {
   fen: string;
@@ -1478,6 +1632,26 @@ type BackgroundEngineTask = {
 };
 
 const backgroundEngineTasks = new Map<string, BackgroundEngineTask>();
+
+const clearCachedEngineResults = () => {
+  for (const board of recognizedBoardCache.values()) {
+    delete board.bestMove;
+    delete board.stockfishMove;
+    delete board.maiaMove;
+    delete board.evaluation;
+    delete board.engineError;
+    delete board.stockfishError;
+    delete board.maiaError;
+  }
+
+  backgroundEngineTasks.clear();
+};
+
+const markEngineSettingsChanged = () => {
+  engineSettingsRevision += 1;
+  clearCachedEngineResults();
+  clearLatestAnalysis("Engine settings changed; waiting for the next board scan.");
+};
 
 const analyzeBoardWithEngine = async (
   sourceId: string,
@@ -1493,10 +1667,12 @@ const analyzeBoardWithEngine = async (
   }
 
   const fen = board.fen.value;
-  const canPublish = () => shouldPublish?.() ?? true;
+  const settingsRevision = engineSettingsRevision;
+  const canPublish = () => engineSettingsRevision === settingsRevision && (shouldPublish?.() ?? true);
+  const maiaLabel = getMaiaLabel();
 
   if (!canPublish()) {
-    console.log("[capture] skipped stale Stockfish analysis before start");
+    console.log("[capture] skipped stale engine analysis before start");
     return false;
   }
 
@@ -1505,40 +1681,97 @@ const analyzeBoardWithEngine = async (
   markLatestAnalysisPending(sourceId, fen, board.detection.orientation);
 
   try {
-    const analysis = await profileAsync(profiler, "findBestMove", () => findBestMove(fen), {
-      mode,
-      fen
-    });
+    const [stockfishResult, maiaResult] = await Promise.allSettled([
+      profileAsync(profiler, "findStockfishMove", () => stockfish.findBestMove(fen), {
+        engine: "Stockfish",
+        mode,
+        fen
+      }),
+      profileAsync(profiler, "findMaiaMove", () => maia.findBestMove(fen), {
+        engine: maiaLabel,
+        mode,
+        fen
+      })
+    ]);
 
     if (!canPublish()) {
-      console.log("[capture] skipped stale Stockfish result");
+      console.log("[capture] skipped stale engine result");
       return false;
     }
 
-    board.bestMove = analysis.bestMove;
-    board.evaluation = analysis.evaluation;
-    markLatestAnalysisReady(sourceId, fen, board.detection.orientation, analysis);
+    if (
+      (stockfishResult.status === "rejected" && stockfishResult.reason instanceof SupersededEngineAnalysisError) ||
+      (maiaResult.status === "rejected" && maiaResult.reason instanceof SupersededEngineAnalysisError)
+    ) {
+      console.log("[capture] skipped superseded engine result");
+      return false;
+    }
+
+    const stockfishAnalysis = stockfishResult.status === "fulfilled" ? stockfishResult.value : undefined;
+    const maiaAnalysis = maiaResult.status === "fulfilled" ? maiaResult.value : undefined;
+    const stockfishError =
+      stockfishResult.status === "rejected"
+        ? stockfishResult.reason instanceof Error
+          ? stockfishResult.reason.message
+          : "Stockfish could not find a move."
+        : undefined;
+    const maiaError =
+      maiaResult.status === "rejected"
+        ? maiaResult.reason instanceof Error
+          ? maiaResult.reason.message
+          : `${maiaLabel} could not find a move.`
+        : undefined;
+
+    if (!stockfishAnalysis && !maiaAnalysis) {
+      board.stockfishError = stockfishError;
+      board.maiaError = maiaError;
+      board.engineError = [stockfishError, maiaError].filter(Boolean).join(" ");
+      markLatestAnalysisError(sourceId, fen, board.detection.orientation, board.engineError);
+      console.log(`[capture] engines failed: ${board.engineError}`);
+      cacheRecognizedBoard(sourceId, board);
+      return true;
+    }
+
+    board.stockfishMove = stockfishAnalysis?.bestMove;
+    board.maiaMove = maiaAnalysis?.bestMove;
+    board.bestMove = stockfishAnalysis?.bestMove;
+    board.evaluation = stockfishAnalysis?.evaluation;
+    board.stockfishError = stockfishError;
+    board.maiaError = maiaError;
+    board.engineError = [stockfishError, maiaError].filter(Boolean).join(" ") || undefined;
+    markLatestAnalysisReady(sourceId, fen, board.detection.orientation, {
+      stockfish: stockfishAnalysis,
+      maia: maiaAnalysis,
+      stockfishError,
+      maiaError
+    });
+
+    const stockfishSummary = stockfishAnalysis
+      ? `Stockfish ${stockfishAnalysis.bestMove.san} (${stockfishAnalysis.bestMove.uci}, ${stockfishAnalysis.evaluation?.display ?? "no eval"})`
+      : `Stockfish failed (${stockfishError})`;
+    const maiaSummary = maiaAnalysis
+      ? `${maiaLabel} ${maiaAnalysis.bestMove.san} (${maiaAnalysis.bestMove.uci})`
+      : `${maiaLabel} failed (${maiaError})`;
     console.log(
-      `[capture] Stockfish ${mode === "continued" ? "continued" : "best"} move: ` +
-        `${board.bestMove.san} (${board.bestMove.uci}, ${board.evaluation?.display ?? "no eval"}, ` +
-        `${formatMs(engineStartedAt)}, ${formatMs(totalStartedAt)} total)`
+      `[capture] engine ${mode === "continued" ? "continued" : "moves"}: ` +
+        `${stockfishSummary}; ${maiaSummary} (${formatMs(engineStartedAt)}, ${formatMs(totalStartedAt)} total)`
     );
     cacheRecognizedBoard(sourceId, board);
     return true;
   } catch (error) {
-    if (error instanceof SupersededStockfishAnalysisError) {
-      console.log("[capture] skipped superseded Stockfish result");
+    if (error instanceof SupersededEngineAnalysisError) {
+      console.log("[capture] skipped superseded engine result");
       return false;
     }
 
     if (!canPublish()) {
-      console.log("[capture] skipped stale Stockfish error");
+      console.log("[capture] skipped stale engine error");
       return false;
     }
 
-    board.engineError = error instanceof Error ? error.message : "Stockfish could not find a best move.";
+    board.engineError = error instanceof Error ? error.message : "The engines could not find moves.";
     markLatestAnalysisError(sourceId, fen, board.detection.orientation, board.engineError);
-    console.log(`[capture] Stockfish failed: ${board.engineError}`);
+    console.log(`[capture] engines failed: ${board.engineError}`);
     cacheRecognizedBoard(sourceId, board);
     return true;
   }
@@ -1554,14 +1787,14 @@ const scheduleBackgroundEngineContinuation = (sourceId: string, board: CapturedB
 
   if (existingTask) {
     console.log(
-      `[capture] Stockfish continuation already running for ${existingTask.fen === fen ? "this" : "a superseded"} board`
+      `[capture] engine continuation already running for ${existingTask.fen === fen ? "this" : "a superseded"} board`
     );
     return;
   }
 
   const backgroundBoard = cloneBoard(board);
   const backgroundStartedAt = performance.now();
-  const backgroundProfiler = createProfiler(`${sourceId}:stockfish`);
+  const backgroundProfiler = createProfiler(`${sourceId}:engines`);
   let didAnalyzeLatestBoard = false;
   let thrownError: unknown;
   const task: BackgroundEngineTask = { fen, promise: Promise.resolve() };
@@ -1579,7 +1812,7 @@ const scheduleBackgroundEngineContinuation = (sourceId: string, board: CapturedB
     } catch (error) {
       thrownError = error;
       const message = error instanceof Error ? error.message : String(error);
-      console.log(`[capture] background Stockfish failed: ${message}`);
+      console.log(`[capture] background engines failed: ${message}`);
     } finally {
       if (backgroundEngineTasks.get(sourceId) === task) {
         backgroundEngineTasks.delete(sourceId);
@@ -2061,10 +2294,29 @@ const captureImageDataUrl = async (
 
 const setStockfishMoveTime = (_event: Electron.IpcMainInvokeEvent, moveTimeMs: number): StockfishSettings => {
   if (Number.isFinite(moveTimeMs)) {
-    stockfishMoveTimeMs = normalizeStockfishMoveTime(moveTimeMs);
+    const nextMoveTimeMs = normalizeStockfishMoveTime(moveTimeMs);
+
+    if (nextMoveTimeMs !== stockfishMoveTimeMs) {
+      stockfishMoveTimeMs = nextMoveTimeMs;
+      markEngineSettingsChanged();
+    }
   }
 
   return getStockfishSettings();
+};
+
+const setMaiaRating = (_event: Electron.IpcMainInvokeEvent, rating: number): EngineSettings => {
+  if (Number.isFinite(rating)) {
+    const nextRating = normalizeMaiaRating(rating);
+
+    if (nextRating !== maiaRating) {
+      maiaRating = nextRating;
+      maia.dispose(new Error("Maia rating changed."));
+      markEngineSettingsChanged();
+    }
+  }
+
+  return getEngineSettings();
 };
 
 const setHiddenMode = (_event: Electron.IpcMainInvokeEvent, enabled: boolean): HiddenModeSettings => {
@@ -2126,6 +2378,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("sources:list", listSources);
   ipcMain.handle("source:capture", captureSource);
   ipcMain.handle("source:capture-image-data-url", captureImageDataUrl);
+  ipcMain.handle("engine:get-settings", getEngineSettings);
+  ipcMain.handle("engine:set-maia-rating", setMaiaRating);
   ipcMain.handle("stockfish:get-settings", getStockfishSettings);
   ipcMain.handle("stockfish:set-move-time", setStockfishMoveTime);
   ipcMain.handle("local-api:get-settings", getLocalApiSettings);
@@ -2150,4 +2404,5 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   localApiServer?.close();
   stockfish.dispose();
+  maia.dispose();
 });

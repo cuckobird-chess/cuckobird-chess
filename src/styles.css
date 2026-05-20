@@ -771,6 +771,14 @@ h2 {
   outline-offset: 2px;
 }
 
+.engine-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(106px, 1fr) 74px;
+}
+
+.engine-legend,
+.engine-control,
 .stockfish-control {
   align-items: center;
   background: #f6f8f5;
@@ -783,6 +791,39 @@ h2 {
   padding: 8px 7px;
 }
 
+.engine-legend {
+  align-content: center;
+  gap: 6px;
+  justify-items: start;
+}
+
+.engine-legend span {
+  align-items: center;
+  color: #33433d;
+  display: flex;
+  font-size: 11px;
+  font-weight: 850;
+  gap: 6px;
+  line-height: 1;
+}
+
+.engine-swatch {
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.82);
+  display: inline-block;
+  height: 9px;
+  width: 9px;
+}
+
+.stockfish-swatch {
+  background: #1fa752;
+}
+
+.maia-swatch {
+  background: #f08a24;
+}
+
+.engine-control span:first-child,
 .stockfish-control span:first-child {
   color: #a44725;
   font-size: 10px;
@@ -792,6 +833,7 @@ h2 {
   text-transform: uppercase;
 }
 
+.engine-number,
 .stockfish-number {
   background: #ffffff;
   border: 1px solid #d4ddd5;
@@ -803,13 +845,30 @@ h2 {
   height: 32px;
   padding: 0 4px;
   text-align: center;
+}
+
+.engine-number {
+  padding: 0 4px;
   width: 58px;
 }
 
+.stockfish-number {
+  padding: 0 4px;
+  width: 58px;
+}
+
+.engine-number:focus,
 .stockfish-number:focus,
 .stockfish-range:focus-visible {
   outline: 3px solid rgba(47, 111, 103, 0.28);
   outline-offset: 2px;
+}
+
+.engine-number:disabled,
+.stockfish-number:disabled,
+.stockfish-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .stockfish-unit {
@@ -903,7 +962,7 @@ h2 {
   filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.24));
 }
 
-.best-move-arrow {
+.move-arrow {
   height: 100%;
   inset: 0;
   overflow: visible;
@@ -913,15 +972,27 @@ h2 {
   z-index: 2;
 }
 
-.best-move-arrow line {
-  stroke: rgba(31, 167, 82, 0.82);
+.move-arrow line {
   stroke-linecap: round;
   stroke-width: 1.45;
 }
 
-.best-move-arrow circle,
-.best-move-arrow marker path {
+.stockfish-move-arrow line {
+  stroke: rgba(31, 167, 82, 0.84);
+}
+
+.stockfish-move-arrow circle,
+.stockfish-move-arrow marker path {
   fill: rgba(31, 167, 82, 0.82);
+}
+
+.maia-move-arrow line {
+  stroke: rgba(240, 138, 36, 0.86);
+}
+
+.maia-move-arrow circle,
+.maia-move-arrow marker path {
+  fill: rgba(240, 138, 36, 0.86);
 }
 
 .fen-output {
@@ -1019,11 +1090,15 @@ h2 {
 
   .board-side-controls {
     grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) minmax(88px, max-content) minmax(112px, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(112px, max-content);
   }
 
   .orientation-button {
     min-width: 0;
+  }
+
+  .engine-row {
+    grid-template-columns: minmax(96px, 1fr) 74px;
   }
 
   .stockfish-control {
@@ -1033,6 +1108,7 @@ h2 {
 
   .stockfish-range {
     align-self: center;
+    grid-column: 1 / -1;
     justify-self: stretch;
     width: 100%;
   }

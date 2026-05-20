@@ -17,6 +17,7 @@ const fenOutput = document.querySelector<HTMLParagraphElement>("#fenOutput");
 const boardTitle = document.querySelector<HTMLHeadingElement>("#boardTitle");
 const orientationWhiteButton = document.querySelector<HTMLButtonElement>("#orientationWhiteButton");
 const orientationBlackButton = document.querySelector<HTMLButtonElement>("#orientationBlackButton");
+const maiaRatingInput = document.querySelector<HTMLInputElement>("#maiaRatingInput");
 const stockfishMoveTimeInput = document.querySelector<HTMLInputElement>("#stockfishMoveTimeInput");
 const stockfishMoveTimeRange = document.querySelector<HTMLInputElement>("#stockfishMoveTimeRange");
 const hiddenModeToggle = document.querySelector<HTMLInputElement>("#hiddenModeToggle");
@@ -32,6 +33,7 @@ let isMonitoring = false;
 let isCaptureInFlight = false;
 let monitorTimer: number | undefined;
 let stockfishSettingsTimer: number | undefined;
+let maiaSettingsTimer: number | undefined;
 let activeCameraStream: MediaStream | null = null;
 let activeCameraSourceId: string | null = null;
 let activeCameraVideo: HTMLVideoElement | null = null;
@@ -49,6 +51,8 @@ type BoardRenderState = {
   fen?: string;
   detectedOrientation: BoardOrientation;
   bestMove?: BestMove;
+  stockfishMove?: BestMove;
+  maiaMove?: BestMove;
   evaluation?: EngineEvaluation;
 };
 
@@ -428,6 +432,20 @@ const applyStockfishSettings = (settings: StockfishSettings) => {
   }
 };
 
+const applyMaiaSettings = (settings: EngineSettings["maia"]) => {
+  if (maiaRatingInput) {
+    maiaRatingInput.min = String(settings.minRating);
+    maiaRatingInput.max = String(settings.maxRating);
+    maiaRatingInput.step = String(settings.stepRating);
+    maiaRatingInput.value = String(settings.rating);
+  }
+};
+
+const applyEngineSettings = (settings: EngineSettings) => {
+  applyStockfishSettings(settings.stockfish);
+  applyMaiaSettings(settings.maia);
+};
+
 const setStockfishMoveTime = (moveTimeMs: number) => {
   if (stockfishMoveTimeInput) {
     stockfishMoveTimeInput.value = String(moveTimeMs);
@@ -443,11 +461,17 @@ const setStockfishMoveTime = (moveTimeMs: number) => {
 
   stockfishSettingsTimer = window.setTimeout(() => {
     stockfishSettingsTimer = undefined;
-    void window.screenshotApi.setStockfishMoveTime(moveTimeMs).then(applyStockfishSettings);
+    void window.screenshotApi
+      .setStockfishMoveTime(moveTimeMs)
+      .then(applyStockfishSettings)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Could not update Stockfish thinking time.";
+        setStatus(message, "error");
+      });
   }, 120);
 };
 
-const getStockfishControlValue = (control: HTMLInputElement) => {
+const getBoundedNumericControlValue = (control: HTMLInputElement) => {
   const value = Number(control.value);
   const min = Number(control.min);
   const max = Number(control.max);
@@ -457,6 +481,28 @@ const getStockfishControlValue = (control: HTMLInputElement) => {
   }
 
   return Math.max(min, Math.min(max, value));
+};
+
+const getStockfishControlValue = (control: HTMLInputElement) => getBoundedNumericControlValue(control);
+
+const getMaiaRatingControlValue = (control: HTMLInputElement) => getBoundedNumericControlValue(control);
+
+const setMaiaRating = (rating: number) => {
+  if (maiaRatingInput) {
+    maiaRatingInput.value = String(rating);
+  }
+
+  if (maiaSettingsTimer !== undefined) {
+    window.clearTimeout(maiaSettingsTimer);
+  }
+
+  maiaSettingsTimer = window.setTimeout(() => {
+    maiaSettingsTimer = undefined;
+    void window.screenshotApi.setMaiaRating(rating).then(applyEngineSettings).catch((error) => {
+      const message = error instanceof Error ? error.message : "Could not update Maia rating.";
+      setStatus(message, "error");
+    });
+  }, 160);
 };
 
 const getVisualSquare = (squareName: string, orientation: BoardOrientation) => {
@@ -474,7 +520,9 @@ const getVisualSquare = (squareName: string, orientation: BoardOrientation) => {
   return { row: 8 - rank, column: file };
 };
 
-const createMoveArrow = (move: BestMove, orientation: BoardOrientation) => {
+type MoveArrowKind = "stockfish" | "maia";
+
+const createMoveArrow = (move: BestMove, orientation: BoardOrientation, kind: MoveArrowKind) => {
   const from = getVisualSquare(move.from, orientation);
   const to = getVisualSquare(move.to, orientation);
 
@@ -493,13 +541,18 @@ const createMoveArrow = (move: BestMove, orientation: BoardOrientation) => {
   const y1 = ((from.row + 0.5) / 8) * 100;
   const x2 = ((to.column + 0.5) / 8) * 100;
   const y2 = ((to.row + 0.5) / 8) * 100;
+  const length = Math.hypot(x2 - x1, y2 - y1) || 1;
+  const offset = kind === "stockfish" ? -0.7 : 0.7;
+  const offsetX = (-(y2 - y1) / length) * offset;
+  const offsetY = ((x2 - x1) / length) * offset;
+  const markerId = `${kind}MoveArrowHead`;
 
-  svg.classList.add("best-move-arrow");
+  svg.classList.add("move-arrow", `${kind}-move-arrow`);
   svg.setAttribute("viewBox", "0 0 100 100");
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
 
-  marker.setAttribute("id", "bestMoveArrowHead");
+  marker.setAttribute("id", markerId);
   marker.setAttribute("markerWidth", "5");
   marker.setAttribute("markerHeight", "5");
   marker.setAttribute("refX", "4.4");
@@ -510,14 +563,14 @@ const createMoveArrow = (move: BestMove, orientation: BoardOrientation) => {
   marker.append(markerPath);
   defs.append(marker);
 
-  line.setAttribute("x1", String(x1));
-  line.setAttribute("y1", String(y1));
-  line.setAttribute("x2", String(x2));
-  line.setAttribute("y2", String(y2));
-  line.setAttribute("marker-end", "url(#bestMoveArrowHead)");
+  line.setAttribute("x1", String(x1 + offsetX));
+  line.setAttribute("y1", String(y1 + offsetY));
+  line.setAttribute("x2", String(x2 + offsetX));
+  line.setAttribute("y2", String(y2 + offsetY));
+  line.setAttribute("marker-end", `url(#${markerId})`);
 
-  fromDot.setAttribute("cx", String(x1));
-  fromDot.setAttribute("cy", String(y1));
+  fromDot.setAttribute("cx", String(x1 + offsetX));
+  fromDot.setAttribute("cy", String(y1 + offsetY));
   fromDot.setAttribute("r", "1.65");
 
   svg.append(defs, line, fromDot);
@@ -528,7 +581,8 @@ const renderFenBoard = (
   pieces: readonly string[] | null = null,
   fen?: string,
   orientation: BoardOrientation = "white",
-  bestMove?: BestMove
+  stockfishMove?: BestMove,
+  maiaMove?: BestMove
 ) => {
   if (!fenBoard) return;
 
@@ -563,9 +617,15 @@ const renderFenBoard = (
     fenBoard.append(square);
   }
 
-  const arrow = bestMove ? createMoveArrow(bestMove, orientation) : null;
-  if (arrow) {
-    fenBoard.append(arrow);
+  const stockfishArrow = stockfishMove ? createMoveArrow(stockfishMove, orientation, "stockfish") : null;
+  const maiaArrow = maiaMove ? createMoveArrow(maiaMove, orientation, "maia") : null;
+
+  if (stockfishArrow) {
+    fenBoard.append(stockfishArrow);
+  }
+
+  if (maiaArrow) {
+    fenBoard.append(maiaArrow);
   }
 
   fenBoard.setAttribute("aria-label", fen ? `Chessboard from FEN ${fen}` : "Empty chessboard");
@@ -573,7 +633,13 @@ const renderFenBoard = (
 
 const renderCurrentBoard = () => {
   const activePerspective = getActivePerspective(currentBoardRender.detectedOrientation);
-  renderFenBoard(currentBoardRender.pieces, currentBoardRender.fen, activePerspective, currentBoardRender.bestMove);
+  renderFenBoard(
+    currentBoardRender.pieces,
+    currentBoardRender.fen,
+    activePerspective,
+    currentBoardRender.stockfishMove ?? currentBoardRender.bestMove,
+    currentBoardRender.maiaMove
+  );
   renderEvaluationBar(currentBoardRender.evaluation);
   updateOrientationControls(activePerspective, Boolean(currentBoardRender.pieces && currentBoardRender.fen));
 };
@@ -593,6 +659,8 @@ const setBoardState = (
   fen?: string,
   orientation?: BoardOrientation,
   bestMove?: BestMove,
+  stockfishMove?: BestMove,
+  maiaMove?: BestMove,
   evaluation?: EngineEvaluation
 ) => {
   if (boardTitle) {
@@ -609,11 +677,20 @@ const setBoardState = (
     fen: pieces ? fen : undefined,
     detectedOrientation: orientation ?? "white",
     bestMove,
+    stockfishMove,
+    maiaMove,
     evaluation: pieces ? evaluation : undefined
   });
 };
 
-const showFen = (fen: string, orientation: BoardOrientation, bestMove?: BestMove, evaluation?: EngineEvaluation) => {
+const showFen = (
+  fen: string,
+  orientation: BoardOrientation,
+  bestMove?: BestMove,
+  stockfishMove?: BestMove,
+  maiaMove?: BestMove,
+  evaluation?: EngineEvaluation
+) => {
   const pieces = parseFenPlacement(fen);
 
   if (!pieces) {
@@ -634,6 +711,8 @@ const showFen = (fen: string, orientation: BoardOrientation, bestMove?: BestMove
     fen,
     detectedOrientation: orientation,
     bestMove,
+    stockfishMove,
+    maiaMove,
     evaluation
   });
 };
@@ -823,7 +902,14 @@ const captureSelectedSource = async () => {
 
     if (result.board) {
       if (result.board.fen) {
-        showFen(result.board.fen.value, result.board.detection.orientation, result.board.bestMove, result.board.evaluation);
+        showFen(
+          result.board.fen.value,
+          result.board.detection.orientation,
+          result.board.bestMove,
+          result.board.stockfishMove,
+          result.board.maiaMove,
+          result.board.evaluation
+        );
       } else {
         setBoardState("Board detected", result.board.fenError ?? "No FEN created");
       }
@@ -880,6 +966,7 @@ refreshButton?.addEventListener("click", loadSources);
 captureButton?.addEventListener("click", toggleMonitoring);
 orientationWhiteButton?.addEventListener("click", () => setBoardPerspectiveOverride("white"));
 orientationBlackButton?.addEventListener("click", () => setBoardPerspectiveOverride("black"));
+maiaRatingInput?.addEventListener("change", () => setMaiaRating(getMaiaRatingControlValue(maiaRatingInput)));
 stockfishMoveTimeInput?.addEventListener("change", () => setStockfishMoveTime(getStockfishControlValue(stockfishMoveTimeInput)));
 stockfishMoveTimeRange?.addEventListener("input", () => setStockfishMoveTime(getStockfishControlValue(stockfishMoveTimeRange)));
 hiddenModeToggle?.addEventListener("change", () => {
@@ -888,7 +975,10 @@ hiddenModeToggle?.addEventListener("change", () => {
 
 setPanelCollapsed(false);
 renderCurrentBoard();
-void window.screenshotApi.getStockfishSettings().then(applyStockfishSettings);
+void window.screenshotApi.getEngineSettings().then(applyEngineSettings).catch((error) => {
+  const message = error instanceof Error ? error.message : "Could not load engine settings.";
+  setStatus(message, "error");
+});
 void loadHiddenModeSettings();
 void loadLocalApiSettings();
 void loadSources();
